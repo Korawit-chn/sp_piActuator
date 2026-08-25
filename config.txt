@@ -1,0 +1,26 @@
+# Mist maker config. Same format as the sensor Pis: `key: value`, one per
+# line, split on the FIRST colon only. Blank lines and # comments ignored.
+# JSON is accepted too, so an existing file in that shape keeps working.
+
+# Required. Together with the device UUID these are what identify this
+# actuator to the backend; a missing one raises at startup rather than
+# failing later as a rejected registration.
+Type: Mist Maker
+Location: Inside Dome 1
+
+# Optional.
+description: mist maker
+
+# Which pin to pulse. Any board.* name, e.g. D17, D27. Passed through to
+# mist_trigger.py; defaults to D17 if this line is missing.
+GPIO: D17
+
+# How often to ask the backend what to do.
+Poll: 5
+
+# Hard cap on any single run, in seconds. EVERY "on" gets an end time, either
+# the duration the dashboard asked for or this, whichever is smaller. It is
+# what stops a mister running when the backend disappears mid-run, so treat
+# it as a safety limit and not a default: set it from how long the unit
+# tolerates running dry.
+MaxRun: 600

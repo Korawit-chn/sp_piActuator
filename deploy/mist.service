@@ -1,0 +1,30 @@
+[Unit]
+# Mist maker control loop. Polls the dashboard for commands and drives the
+# relay. Unlike the sensor units this does NOT want sensor-timesync.service:
+# nothing here reads or writes a timestamp, so a wrong clock cannot misfire
+# the relay. Order it after timesync anyway if this Pi also runs sensors,
+# purely so the journal lines up.
+Description=Mist maker actuator client
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/sp_dashboard/Pi Actuator
+ExecStart=/home/pi/venv/bin/python3 "/home/pi/sp_dashboard/Pi Actuator/relay_control.py" serve
+
+# SIGTERM is handled in-process: if the relay is believed ON, the handler
+# fires one last pulse to stop it and reports OFF before exiting. Firing means
+# launching mist_trigger.py as a subprocess, so give it room - a stop that
+# times out and gets SIGKILLed would leave the mister running.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Safe because start-up converges the relay to OFF: a crash-restart loop ends
+# with the mister off rather than running unattended. It is also what lets
+# relay_control.py skip defensive error handling.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

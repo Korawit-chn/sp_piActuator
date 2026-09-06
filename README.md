@@ -1,7 +1,13 @@
 # Link
-https://github.com/Korawit-chn/sp_dashboard
 
-https://github.com/Korawit-chn/sp_piSensor
+The project ships as four repos:
+
+| Part | Repo | Latest release |
+| ---- | ---- | -------------- |
+| Dashboard + database | [sp_dashboard](https://github.com/Korawit-chn/sp_dashboard) | [v2.4.0](https://github.com/Korawit-chn/sp_dashboard/tree/v2.4.0) |
+| Pi sensor node | [sp_piSensor](https://github.com/Korawit-chn/sp_piSensor) | [v2.2.0](https://github.com/Korawit-chn/sp_piSensor/tree/v2.2.0) |
+| Pi actuator node **(this repo)** | [sp_piActuator](https://github.com/Korawit-chn/sp_piActuator) | [v1.2.0](https://github.com/Korawit-chn/sp_piActuator/tree/v1.2.0) |
+| Shared Pi environment | [sp_piAll](https://github.com/Korawit-chn/sp_piAll) | [v1.0.0](https://github.com/Korawit-chn/sp_piAll/tree/v1.0.0) |
 
 # Mist maker
 

@@ -4,10 +4,14 @@
     python3 relay_control.py serve   # obey the dashboard (systemd runs this)
     python3 relay_control.py flip    # one raw pulse, see "Drift" below
 
-Built to match the sensor Pi clients: same `config.txt` format, the same
-`device_uuid.txt`, the same `networkList.txt`, the same register-then-poll
-shape. What it deliberately does NOT have, because a command is not data:
-no offline cache, no clock sync, no tick scheduler, no background thread.
+Shares the sensor Pi clients' config format, device_uuid.txt and
+networkList.txt by IMPORTING them from `pi_common`, not by copying them - this
+file used to carry its own config parser, its own UUID reader and a third
+implementation of backend discovery, all of which could drift from the sensors'
+while every docstring claimed they matched.
+
+What it deliberately does NOT have, because a command is not data: no offline
+cache, no clock sync, no tick scheduler, no background thread.
 
 Every trigger is still sent by launching mist_trigger.py as a separate
 process. A fresh process start-to-exit is what reliably produces one trigger
@@ -52,10 +56,14 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 from pathlib import Path
 
 import requests
+
+from pi_common.config import load_config_data, to_number
+from pi_common.discovery import find_backend as _find_backend
+from pi_common.discovery import resolve_network_list
+from pi_common.identity import get_device_uuid
 
 # Anchored to this folder, not the cwd, so launching from somewhere else
 # cannot quietly create a second identity or a second state file.
@@ -64,12 +72,15 @@ BASE_DIR = Path(__file__).resolve().parent
 TRIGGER = BASE_DIR / "mist_trigger.py"
 STATE_FILE = BASE_DIR / "mist_state.json"
 CONFIG_FILE = Path(os.environ.get("MIST_CONFIG", BASE_DIR / "config.txt"))
-NETWORK_LIST = Path(os.environ.get("MIST_NETWORK_LIST", BASE_DIR / "networkList.txt"))
+# One networkList.txt per Pi, in the same flat directory as this script. The
+# sensor clients read the same file - the repo's "PI sensor" / "Pi Actuator"
+# split does not survive deployment. $MIST_NETWORK_LIST overrides it.
+NETWORK_LIST = resolve_network_list(
+    BASE_DIR / "networkList.txt", env_var="MIST_NETWORK_LIST"
+)
 
-# Same filename and same meaning as the sensors: one UUID per physical Pi.
-# On a Pi that also runs sensors, symlink this to "PI sensor/device_uuid.txt"
-# BEFORE the first start - afterwards is too late, a second UUID has already
-# been minted and registered.
+# One UUID per physical Pi. The sensor clients read this same file - the Pi's
+# directory is flat, so there is nothing to keep in step and nothing to symlink.
 UUID_FILE = Path(os.environ.get("SENSOR_UUID_FILE", BASE_DIR / "device_uuid.txt"))
 
 USAGE = """usage: relay_control.py <mode>
@@ -85,7 +96,6 @@ BACKEND_PORT = 5000
 DEFAULT_POLL_SECONDS = 5
 DEFAULT_MAX_RUN_SECONDS = 600
 DEFAULT_GPIO = "D17"
-HEARTBEAT_SECONDS = 60
 
 # Which pin mist_trigger.py should pulse. Read from `GPIO:` in config.txt at
 # startup, for every mode - a bench run has to hit the same pin the service
@@ -100,6 +110,9 @@ STATE = {"believed": "OFF", "lastActionID": None}
 
 # Held at module level purely so the shutdown handler can file a last report.
 LINK = {"base_url": None, "actuatorID": None}
+
+# Whether the "cannot read networkList.txt" message has already been printed
+# for the current outage. Reset the moment the file reads again.
 
 
 # ---------------------------------------------------------------------------
@@ -200,48 +213,12 @@ def flip() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Config, mirroring sensorVPD/configReader.py
+# Config - format and parsing shared with the sensors via pi_common.config
 # ---------------------------------------------------------------------------
 
-def _parse_text_config(text):
-    """`key: value` per line. Split on the FIRST colon only, so a value
-    containing one survives. Blank lines and # comments are skipped."""
-    data = {}
-
-    for raw in text.splitlines():
-        line = raw.strip()
-
-        if not line or line.startswith("#"):
-            continue
-
-        key, separator, value = line.partition(":")
-
-        if not separator:
-            continue
-
-        key = key.strip()
-
-        if key:
-            data[key] = value.strip()
-
-    return data
-
-
-def _number(value, fallback):
-    try:
-        return type(fallback)(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
 def _load_config_data():
-    """The file, parsed. JSON is tried first, so either format works."""
-    raw = CONFIG_FILE.read_text()
-
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return _parse_text_config(raw)
+    """The file, parsed. JSON or `key: value`, same as the sensors."""
+    return load_config_data(CONFIG_FILE)
 
 
 def read_gpio():
@@ -286,16 +263,16 @@ def read_config():
         "actuatorName": data.get("Name") or data.get("actuatorName"),
         "description": data.get("description") or data.get("Description"),
         "gpio": data.get("GPIO") or data.get("gpio") or DEFAULT_GPIO,
-        "pollSeconds": _number(data.get("Poll"), DEFAULT_POLL_SECONDS),
-        "maxRunSeconds": _number(data.get("MaxRun"), DEFAULT_MAX_RUN_SECONDS),
+        "pollSeconds": to_number(data.get("Poll"), DEFAULT_POLL_SECONDS),
+        "maxRunSeconds": to_number(data.get("MaxRun"), DEFAULT_MAX_RUN_SECONDS),
     }
 
 
 def device_uuid():
-    if not UUID_FILE.exists():
-        UUID_FILE.write_text(str(uuid.uuid4()))
-
-    return UUID_FILE.read_text().strip()
+    """This Pi's UUID - the same file and the same meaning as the sensors.
+    See pi_common.identity for the warning about symlinking it BEFORE the first
+    start on a Pi that runs both."""
+    return get_device_uuid(UUID_FILE)
 
 
 # ---------------------------------------------------------------------------
@@ -303,28 +280,15 @@ def device_uuid():
 # ---------------------------------------------------------------------------
 
 def find_backend():
-    """First address in networkList.txt that answers /api/time."""
-    try:
-        lines = NETWORK_LIST.read_text().splitlines()
-    except OSError:
-        print(f"[mist] cannot read {NETWORK_LIST}")
-        return None
+    """First address in networkList.txt that answers /api/time, or None.
 
-    for line in lines:
-        host = line.strip()
-
-        if not host or host.startswith("#"):
-            continue
-
-        url = f"http://{host}:{BACKEND_PORT}"
-
-        try:
-            if requests.get(f"{url}/api/time", timeout=3).status_code == 200:
-                return url
-        except requests.RequestException:
-            pass
-
-    return None
+    The search itself is pi_common.discovery, shared with the sensor clients -
+    this used to be a third hand-written copy of it. The once-per-outage logging
+    lives there too: discovery runs on every poll while the backend is missing,
+    and logging per attempt would put one identical line in the journal every
+    few seconds, the same reason C5A.py logs a failed serial open once.
+    """
+    return _find_backend(str(NETWORK_LIST), port=BACKEND_PORT)
 
 
 def register(base_url, config):
@@ -344,8 +308,13 @@ def register(base_url, config):
 
 
 def report():
-    """Tell the backend what the hardware is actually doing. Doubles as the
-    heartbeat - /api/actuatorState stamps lastHeartbeat on every call."""
+    """Tell the backend what the hardware is actually doing.
+
+    State only. It is NOT a heartbeat any more - it used to be called every
+    60 s purely to stamp lastHeartbeat, and liveness now belongs to the device
+    agent, which runs once per Pi and reports for the whole box. So this fires
+    on a state change and nowhere else, and an idle relay writes nothing.
+    """
     if LINK["base_url"] is None or LINK["actuatorID"] is None:
         return
 
@@ -370,7 +339,7 @@ def apply_command(cmd, max_run, off_at):
         # rule is also the entire network-failure story: if the backend
         # vanishes mid-run, the timer still fires and the mister still stops.
         requested = cmd.get("durationSeconds") or max_run
-        return time.monotonic() + min(_number(requested, max_run), max_run)
+        return time.monotonic() + min(to_number(requested, max_run), max_run)
 
     if action == "OFF":
         set_state("OFF")
@@ -414,8 +383,11 @@ def serve():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    # Report the converged state once at startup, so the dashboard is right
+    # from the first poll rather than after the first command.
+    report_pending = True
+
     off_at = None
-    last_report = 0.0
 
     while True:
         # Before the network, always: the auto-off has to fire whether or not
@@ -424,7 +396,7 @@ def serve():
             print("[mist] run finished")
             set_state("OFF")
             off_at = None
-            last_report = 0.0
+            report_pending = True
 
         try:
             if LINK["base_url"] is None:
@@ -452,11 +424,15 @@ def serve():
                 STATE["lastActionID"] = cmd.get("actionID")
                 off_at = apply_command(cmd, max_run, off_at)
                 save_state()
-                last_report = 0.0
+                report_pending = True
 
-            if time.monotonic() - last_report >= HEARTBEAT_SECONDS:
+            # ON STATE CHANGE ONLY. This used to fire every 60 s as well, purely
+            # to stamp a heartbeat - the device agent reports liveness now, so
+            # a relay sitting idle writes nothing. Retried on the next poll if
+            # the network is down, which is why it is a flag and not a call.
+            if report_pending:
                 report()
-                last_report = time.monotonic()
+                report_pending = False
 
         except requests.RequestException as e:
             # Network trouble only. Anything else is a real bug: let it crash

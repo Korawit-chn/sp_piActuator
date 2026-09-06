@@ -1,0 +1,53 @@
+# Fan config. Same format as the sensors and the mist maker: `key: value`, one
+# per line, split on the FIRST colon only. Blank lines and # comments ignored.
+#
+# NOT config.txt - the mist maker owns that name, and the Pi is one flat
+# directory, so a box driving both the fan and the mister needs two files.
+# Override with $FAN_CONFIG.
+
+# Required. Together with the device UUID these identify this actuator to the
+# backend; a missing one raises at startup rather than failing later as a
+# rejected registration.
+Type: FAN
+Location: Inside Dome 1
+
+# Optional.
+Name: dome fan
+description: 4-wire PWM case fan
+
+# --- hardware ---
+# PWM must be a HARDWARE PWM pin (12, 13, 18 or 19 on a Pi). pigpio drives it,
+# so the daemon has to be running: sudo pigpiod
+PwmPin: 18
+TachPin: 24
+
+# 25 kHz is the Intel 4-wire fan spec. Audible whine below ~20 kHz.
+PwmHz: 25000
+
+# Tach pulses per revolution. Two for almost every PC fan; check the datasheet
+# before trusting the rpm figure on the dashboard.
+PulsesPerRev: 2
+
+# What "ON" means. SET_SPEED carries its own duty; ON and OFF are fixed points
+# so they never inherit whatever a previous SET_SPEED left behind.
+OnDuty: 100
+
+# --- timing ---
+# Longest a single run may last, in seconds, and what a command that named no
+# duration gets. Every run has an end time - there is no run-forever mode.
+#
+# This is the cap the HARDWARE obeys. The backend clamps to its own
+# MAX_FAN_SECONDS as well, and that copy is deliberate rather than redundant:
+# this one still applies when the dashboard is unreachable mid-run.
+MaxRun: 3600
+
+# How often to ask the backend what to do.
+Poll: 5
+
+# How often to push duty/pulses/rpm back. Every poll would be a lot of rows in
+# ActuatorLog for a value that changes slowly.
+Report: 15
+
+# How long the tach is counted for, per measurement. Longer is more accurate
+# and makes the loop less responsive; it is spent inside every poll cycle.
+RpmWindow: 1

@@ -7,11 +7,15 @@
 Description=Mist maker actuator client
 After=network.target
 
+# Pulls in the device agent, which is the ONLY thing that reports this Pi's
+# liveness. Without it the mist panel shows the Pi as unreachable forever.
+Wants=device-agent.service
+
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/sp_dashboard/Pi Actuator
-ExecStart=/home/pi/venv/bin/python3 "/home/pi/sp_dashboard/Pi Actuator/relay_control.py" serve
+WorkingDirectory=/home/pi/sp_dashboard
+ExecStart=/home/pi/venv/bin/python3 /home/pi/sp_dashboard/relay_control.py serve
 
 # SIGTERM is handled in-process: if the relay is believed ON, the handler
 # fires one last pulse to stop it and reports OFF before exiting. Firing means

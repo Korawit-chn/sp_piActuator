@@ -1,8 +1,8 @@
-"""relay_control.py — mist maker control, by hand or from the dashboard.
+"""mist_relay_control.py — mist maker control, by hand or from the dashboard.
 
-    python3 relay_control.py 60      # mist for 60 seconds, then stop
-    python3 relay_control.py serve   # obey the dashboard (systemd runs this)
-    python3 relay_control.py flip    # one raw pulse, see "Drift" below
+    python3 mist_relay_control.py 60      # mist for 60 seconds, then stop
+    python3 mist_relay_control.py serve   # obey the dashboard (systemd runs this)
+    python3 mist_relay_control.py flip    # one raw pulse, see "Drift" below
 
 Shares the sensor Pi clients' config format, device_uuid.txt and
 networkList.txt by IMPORTING them from `pi_common`, not by copying them - this
@@ -38,7 +38,7 @@ DRIFT
     dashboard then confidently shows the opposite of what the mister is doing.
 
     With two states, a disagreement is always exactly one toggle out, so one
-    pulse fixes it: stop the service, run `relay_control.py flip`, start it
+    pulse fixes it: stop the service, run `mist_relay_control.py flip`, start it
     again. The relay ends up matching what the dashboard already said. Rare
     enough that a bench command beats building UI for it.
 
@@ -83,7 +83,7 @@ NETWORK_LIST = resolve_network_list(
 # directory is flat, so there is nothing to keep in step and nothing to symlink.
 UUID_FILE = Path(os.environ.get("SENSOR_UUID_FILE", BASE_DIR / "device_uuid.txt"))
 
-USAGE = """usage: relay_control.py <mode>
+USAGE = """usage: mist_relay_control.py <mode>
 
   serve    poll the dashboard and obey it (this is what systemd runs)
   <n>      mist for n seconds, then stop
@@ -225,7 +225,7 @@ def read_gpio():
     """Just the pin name.
 
     Separate from read_config() and deliberately forgiving: a bench run of
-    `relay_control.py 60` should still work on a Pi where config.txt has not
+    `mist_relay_control.py 60` should still work on a Pi where config.txt has not
     been filled in yet, and the pin is the one setting that run genuinely
     needs. Everything else read_config() validates is about registration.
     """
@@ -449,7 +449,7 @@ if __name__ == "__main__":
     #
     # No default mode on purpose. The original single-mode script treated a
     # bare call as "mist for 60 seconds", which is now a trap: someone
-    # expecting the service types `relay_control.py`, gets a silent 60-second
+    # expecting the service types `mist_relay_control.py`, gets a silent 60-second
     # run, and sees no attempt to reach the backend. Nothing here touches the
     # hardware unless it was asked to.
     if len(sys.argv) < 2:

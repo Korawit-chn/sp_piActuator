@@ -18,7 +18,7 @@ sensor Pi clients — same `config.txt` format, same `device_uuid.txt`, same
 | File | |
 |------|--|
 | `mist_trigger.py` | Fires exactly one trigger and exits. Takes the pin as an argument; nothing else in it should change. |
-| `relay_control.py` | Everything else: manual runs, dashboard control, registration, status reporting. |
+| `mist_relay_control.py` | Everything else: manual runs, dashboard control, registration, status reporting. |
 | `config.txt` | Type, location, poll interval, run cap. |
 | `networkList.txt` | Candidate backend addresses, tried in order. |
 | `deploy/mist.service` | systemd unit. |
@@ -26,9 +26,9 @@ sensor Pi clients — same `config.txt` format, same `device_uuid.txt`, same
 ## Running it
 
 ```
-python3 relay_control.py 60      # mist for 60 seconds, then stop
-python3 relay_control.py serve   # obey the dashboard (this is what systemd runs)
-python3 relay_control.py flip    # one raw pulse - see "When the relay is out of sync"
+python3 mist_relay_control.py 60      # mist for 60 seconds, then stop
+python3 mist_relay_control.py serve   # obey the dashboard (this is what systemd runs)
+python3 mist_relay_control.py flip    # one raw pulse - see "When the relay is out of sync"
 ```
 
 The pin comes from `GPIO:` in `config.txt` and is passed through to
@@ -48,7 +48,7 @@ No new dependencies: `requests` is already in the sensor venv.
 
 ```
 source ~/venv/bin/activate
-python3 relay_control.py serve
+python3 mist_relay_control.py serve
 ```
 
 ## The board toggles — why that shapes everything
@@ -61,7 +61,7 @@ The dashboard is the opposite: `GET /api/actuatorCommand` re-serves the latest
 command on every poll. Acting on that directly would pulse the relay every few
 seconds and the mister would strobe.
 
-So `relay_control.py` keeps a **believed state** in `mist_state.json` and fires
+So `mist_relay_control.py` keeps a **believed state** in `mist_state.json` and fires
 only on a transition. `set_state()` is the only function allowed to trigger the
 board in normal operation. If you add code that calls `fire()` directly, the
 belief drifts away from the hardware and stays wrong.
@@ -88,7 +88,7 @@ Three rules, none of which need the network:
 Set `MaxRun` from how long the unit tolerates running dry, not from how long a
 typical run is. It is the outer bound on every failure mode above.
 
-**Do not run `serve` and a manual `relay_control.py 60` at the same time.**
+**Do not run `serve` and a manual `mist_relay_control.py 60` at the same time.**
 Manual runs go through `set_state()` so the belief stays correct, but two
 processes racing on one state file and one relay is still a mess.
 `sudo systemctl stop mist` first.
@@ -106,7 +106,7 @@ the dashboard is already showing.
 
 ```
 sudo systemctl stop mist
-python3 relay_control.py flip     # one pulse, belief left alone
+python3 mist_relay_control.py flip     # one pulse, belief left alone
 sudo systemctl start mist
 ```
 

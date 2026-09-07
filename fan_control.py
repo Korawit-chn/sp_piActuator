@@ -50,9 +50,23 @@ WHY NO BELIEVED-STATE FILE
 
 Unlike the mist relay, a PWM fan is level-based and has readback. Setting a duty
 is idempotent, and the tach says what actually happened, so there is no drift to
-track and nothing to converge on restart.
+track and nothing to converge on restart: startup drives the pin to 0 and that
+is the truth.
+
+fan_state.json exists anyway, and holds ONE thing - the actionID last applied.
+That is dedupe, not believed state. Without it, anything that clears the
+in-memory copy - a restart, or a reconnect that re-registers - makes the
+still-current command look new, re-applies it and RE-ARMS the run timer. On a
+flaky link that pushes the deadline out on every blip, and a fan asked for ten
+seconds never stops.
+
+It is deliberately not used to resume a run. Startup is always duty 0, so an
+interrupted run is abandoned rather than silently restarted; the Pi reports 0
+on its next status post, so the dashboard shows a stopped fan instead of
+claiming one that is not running.
 """
 
+import json
 import os
 import signal
 import sys
@@ -80,6 +94,10 @@ CONFIG_FILE = Path(os.environ.get("FAN_CONFIG", BASE_DIR / "config_fan.txt"))
 UUID_FILE = Path(os.environ.get("SENSOR_UUID_FILE", BASE_DIR / "device_uuid.txt"))
 NETWORK_LIST = Path(os.environ.get("SP_NETWORK_LIST", BASE_DIR / "networkList.txt"))
 
+# The applied actionID, across restarts. Named like mist_state.json and written
+# the same way, but it carries no hardware state - see the docstring.
+STATE_FILE = BASE_DIR / "fan_state.json"
+
 BACKEND_PORT = int(os.environ.get("SP_BACKEND_PORT", 5000))
 REQUEST_TIMEOUT = 5
 
@@ -105,6 +123,44 @@ stop_event = threading.Event()
 def handle_stop(signum, frame):
     print("[fan] stopping...")
     stop_event.set()
+
+
+# ---------------------------------------------------------------------------
+# Applied-command state
+# ---------------------------------------------------------------------------
+
+# The last actionID this Pi actually applied. In memory it would be lost by
+# every restart and every re-registration; on disk it survives both, which is
+# the whole point - see WHY NO BELIEVED-STATE FILE.
+STATE = {"lastActionID": None}
+
+
+def load_state():
+    """Read the applied actionID. Absent or unreadable means None.
+
+    None is safe in the direction that matters: the next command is treated as
+    new and applied. The failure it cannot cause is a fan left spinning, since
+    startup sets duty 0 regardless of what is in here.
+    """
+    try:
+        data = json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        STATE["lastActionID"] = None
+        return
+
+    STATE["lastActionID"] = data.get("lastActionID")
+
+
+def save_state():
+    """Write it atomically - a truncated file on the next start reads as None."""
+    try:
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(STATE))
+        os.replace(tmp, STATE_FILE)
+    except OSError as e:
+        # Not fatal. The run still ends on time from the in-memory deadline;
+        # only the restart case loses its dedupe.
+        print(f"[fan] cannot write {STATE_FILE.name}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +283,8 @@ LINK = {"base_url": None, "actuatorID": None}
 
 def ensure_backend(session):
     """Keep the current backend while it answers; rescan only when it stops."""
+    previous = LINK["base_url"]
+
     if LINK["base_url"] is not None:
         try:
             r = session.get(f"{LINK['base_url']}/api/time", timeout=3)
@@ -237,12 +295,22 @@ def ensure_backend(session):
 
         print(f"[fan] lost backend {LINK['base_url']}, rescanning")
         LINK["base_url"] = None
-        LINK["actuatorID"] = None
 
     LINK["base_url"] = find_backend(str(NETWORK_LIST), port=BACKEND_PORT)
 
     if LINK["base_url"]:
         print("[fan] backend:", LINK["base_url"])
+
+        # Only a DIFFERENT backend invalidates the identity. actuatorIDs and
+        # actionIDs are one database's numbering, so a rescan that lands
+        # somewhere else has to re-register - but a blip and a reconnect to the
+        # SAME PC must not, or the re-registration clears the applied actionID,
+        # the still-current command reads as new, and the run timer is re-armed.
+        if previous is not None and LINK["base_url"] != previous:
+            print("[fan] different backend - re-registering")
+            LINK["actuatorID"] = None
+            STATE["lastActionID"] = None
+            save_state()
 
     return LINK["base_url"]
 
@@ -386,8 +454,13 @@ def serve():
     fan = Fan(config)
     session = requests.Session()
 
+    # Fan() has already set duty 0, so the hardware is known-off here whatever
+    # happened last time. What is restored is only the applied actionID, which
+    # is what stops the command still sitting on the dashboard from being
+    # re-applied and spinning the fan straight back up.
+    load_state()
+
     applied_duty = 0.0
-    last_action_id = None
     last_report = 0.0
     off_at = None
 
@@ -421,7 +494,6 @@ def serve():
                 if LINK["actuatorID"] is None:
                     LINK["actuatorID"] = register(session, config)
                     print("[fan] registered actuatorID:", LINK["actuatorID"])
-                    last_action_id = None
 
                 action_id, action, duty, duration = fetch_command(session)
 
@@ -431,9 +503,12 @@ def serve():
                 #
                 # Applying it is also what arms the timer, so a re-served
                 # command cannot keep pushing the deadline out - which is the
-                # same reason the mister tracks lastActionID.
-                if action_id != last_action_id:
-                    last_action_id = action_id
+                # same reason the mister tracks lastActionID. It is kept on
+                # disk for the same reason too: a restart that forgot it would
+                # re-apply the command and re-arm the deadline from zero.
+                if action_id != STATE["lastActionID"]:
+                    STATE["lastActionID"] = action_id
+                    save_state()
                     applied_duty = fan.set_duty(
                         duty_for(action, duty, config["onDutyPercent"])
                     )

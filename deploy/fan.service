@@ -1,0 +1,32 @@
+[Unit]
+# PWM fan control loop. Polls the dashboard for a speed and reports duty,
+# pulse count and measured rpm back.
+#
+# Unlike the sensor units this does NOT want sensor-timesync.service: nothing
+# here reads or writes a timestamp, so a wrong clock cannot misdrive the fan.
+Description=Fan actuator client
+After=network.target pigpiod.service
+Requires=pigpiod.service
+
+# Pulls in the device agent, which is the ONLY thing that reports this Pi's
+# liveness. Without it the fan panel shows the Pi as unreachable forever.
+Wants=device-agent.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/sp_dashboard
+ExecStart=/home/pi/venv/bin/python3 /home/pi/sp_dashboard/fan_control.py
+
+# SIGTERM is handled in-process: the loop breaks, PWM is set to 0 and pigpio is
+# released, so a stop always leaves the fan off rather than spinning.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+# Safe because startup sets duty 0 before anything else: a crash-restart loop
+# ends with the fan stopped, not stuck at whatever it was last driven to.
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

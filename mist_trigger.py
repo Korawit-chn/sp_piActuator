@@ -7,7 +7,7 @@ Running this once = one trigger = one toggle of the board's P3.1 loop.
 
 The pin is the ONLY thing that is configurable here, and it defaults to D17 so
 running the file bare behaves exactly as it did when it was verified by hand.
-relay_control.py passes the pin from `GPIO:` in config.txt.
+mist_relay_control.py passes the pin from `GPIO:` in config.txt.
 
 Everything else about this file is load-bearing hardware behaviour. Keep it as
 close as possible to what was confirmed working on the real board.

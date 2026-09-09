@@ -8,7 +8,9 @@
 Type: Mist Maker
 Location: Inside Dome 1
 
-# Optional.
+# Optional. Name is a label for the dashboard; config_fan.txt documents it and
+# this file did not, though relay_control.py has always read it.
+Name: dome mister
 description: mist maker
 
 # Which pin to pulse. Any board.* name, e.g. D17, D27. Passed through to

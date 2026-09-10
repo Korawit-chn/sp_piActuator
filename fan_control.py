@@ -13,16 +13,27 @@ command and reports back what the hardware is actually doing:
     SET_SPEED  -> the explicit duty the command carries, the only case where an
                   arbitrary value is applied
 
-EVERY RUN ENDS
+A RUN ENDS ON TIME, OR WHEN IT IS TOLD TO
 
-A command that spins the fan up also says for how long, exactly like the mist
-maker: the dashboard sends a duty AND a duration, and this file stops the fan
-when the time is up. A command that arrives without one gets MaxRun from
-config_fan.txt, so there is no run-forever mode to fall into by omission.
+A command that spins the fan up may also say for how long, exactly like the
+mist maker: send a duty AND a duration and this file stops the fan when the
+time is up, clamped to MaxRun from config_fan.txt.
 
-The timer is checked BEFORE the network on every cycle, which is the whole
-point of keeping it here rather than having the backend send a later OFF: if
-the dashboard disappears mid-run, the fan still stops. Setting duty 0 is also
+A command that names NO duration has no end time. It runs until an OFF, or a
+SET_SPEED of 0, reaches it. That is the deliberate second form and it costs the
+guarantee the paragraph below describes: with no deadline to fall back on, a
+fan started this way does NOT stop by itself if the dashboard disappears
+mid-run. It is for a run someone is watching. A duration is the form that
+survives an outage, and it is still what the dashboard sends unless the
+duration box is left empty.
+
+Only a MISSING duration means that. A present-but-unusable one - a zero, a
+negative, a value that will not parse - is a malformed request rather than a
+request for no timer, and still gets MaxRun.
+
+The timer, when there is one, is checked BEFORE the network on every cycle,
+which is the whole point of keeping it here rather than having the backend send
+a later OFF: if the dashboard disappears mid-run, the fan still stops. Setting duty 0 is also
 the one thing that is always safe to re-apply, so a stop cannot be lost the way
 a latching relay's could.
 
@@ -354,12 +365,20 @@ def fetch_command(session):
     except (TypeError, ValueError):
         duty = None
 
-    duration = data.get("durationSeconds")
+    # None means the command named NO duration, which run_until() reads as "no
+    # deadline". A value that will not parse must NOT collapse to the same
+    # thing - that would turn a malformed request into a fan running forever -
+    # so it becomes -1, which run_until() treats like any other non-positive
+    # duration and answers with MaxRun.
+    raw_duration = data.get("durationSeconds")
 
-    try:
-        duration = None if duration is None else float(duration)
-    except (TypeError, ValueError):
+    if raw_duration is None:
         duration = None
+    else:
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            duration = -1.0
 
     return data.get("actionID"), data.get("action"), duty, duration
 
@@ -391,19 +410,27 @@ def duty_for(action, duty, on_duty):
 def run_until(duty, requested, max_run):
     """When a run at `duty` should end, as a monotonic deadline, or None.
 
-    None means there is nothing to time. That is duty 0 and only duty 0: a
-    stopped fan is already in the state the timer exists to reach, so arming
-    one would just re-apply 0 to a fan that is already at 0.
+    None means there is nothing to time, and there are now two ways to get it.
 
-    A command with no duration is NOT a run-forever request - it gets max_run.
-    The dashboard always sends one, so this covers a climate rule or a curl
-    that did not, and it is the reason there is no code path here that leaves a
-    spinning fan with no deadline.
+    Duty 0: a stopped fan is already in the state the timer exists to reach, so
+    arming one would just re-apply 0 to a fan that is already at 0.
+
+    `requested` of None: the command named no duration at all, which is a
+    deliberate request to run until an OFF arrives. See the header - it is the
+    form that does NOT survive the dashboard going away mid-run, and it is
+    chosen rather than fallen into.
+
+    Falling into it is what the second branch prevents. A zero, a negative, or
+    a value fetch_command() could not parse (which it passes on as -1) is a
+    malformed request, not a request for no timer, so it still gets max_run.
     """
     if duty <= 0:
         return None
 
-    seconds = max_run if requested is None or requested <= 0 else requested
+    if requested is None:
+        return None
+
+    seconds = requested if requested > 0 else max_run
 
     return time.monotonic() + min(seconds, max_run)
 
@@ -515,8 +542,16 @@ def serve():
                     off_at = run_until(applied_duty, duration,
                                        config["maxRunSeconds"])
 
-                    for_text = ("" if off_at is None
-                                else f" for {off_at - time.monotonic():.0f}s")
+                    # An untimed run and a stop both leave off_at None, so say
+                    # which this is. "duty 60%" with nothing after it would
+                    # otherwise be the only trace of a fan that intends to keep
+                    # spinning until something stops it.
+                    if off_at is not None:
+                        for_text = f" for {off_at - time.monotonic():.0f}s"
+                    elif applied_duty > 0:
+                        for_text = " until stopped - no timer"
+                    else:
+                        for_text = ""
                     print(f"[fan] {action} -> duty {applied_duty:.0f}%{for_text}")
 
                 now = time.monotonic()

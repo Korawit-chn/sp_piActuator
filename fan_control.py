@@ -37,9 +37,11 @@ a later OFF: if the dashboard disappears mid-run, the fan still stops. Setting d
 the one thing that is always safe to re-apply, so a stop cannot be lost the way
 a latching relay's could.
 
-Telemetry (duty applied, pulse count, measured rpm) goes to /api/actuatorStatus,
-which writes an ActuatorLog row and nothing else. It is NOT a heartbeat - the
-device agent reports whether this Pi is alive, once per box.
+State and telemetry (duty applied, pulse count, measured rpm) go to
+/api/actuatorState, the same endpoint the mister reports to. The backend sets
+Actuator.status from the state and writes an ActuatorLog row from the readings.
+It is NOT a heartbeat - the device agent reports whether this Pi is alive, once
+per box.
 
 Requires pigpio and its daemon:  sudo apt install pigpio && sudo pigpiod
 
@@ -384,11 +386,14 @@ def fetch_command(session):
 
 
 def report(session, duty, pulses, rpm):
-    """Telemetry. Writes one ActuatorLog row; liveness is the agent's job."""
+    """State plus telemetry. The backend sets Actuator.status from state and
+    writes one ActuatorLog row from the readings; liveness is the agent's job.
+    Same endpoint as the mister - a fan is ON whenever it has any duty."""
     session.post(
-        f"{LINK['base_url']}/api/actuatorStatus",
+        f"{LINK['base_url']}/api/actuatorState",
         json={
             "actuatorID": LINK["actuatorID"],
+            "state": "ON" if duty > 0 else "OFF",
             "pwmDutyPercent": duty,
             "pulseCount": pulses,
             "rpm": None if rpm is None else round(rpm),
@@ -553,6 +558,12 @@ def serve():
                     else:
                         for_text = ""
                     print(f"[fan] {action} -> duty {applied_duty:.0f}%{for_text}")
+
+                    # Report the new state now, not at the next reportSeconds
+                    # boundary. This report is what overwrites the dashboard's
+                    # optimistic status, so a late one leaves it showing intent
+                    # for up to a whole report interval.
+                    last_report = 0.0
 
                 now = time.monotonic()
 

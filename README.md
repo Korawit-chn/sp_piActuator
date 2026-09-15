@@ -167,7 +167,7 @@ journalctl -u mist -f
 | `GET /api/time` | backend discovery, one per address in `networkList.txt` |
 | `POST /api/registerActuator` | once, on first contact — find-or-create by `deviceUUID` |
 | `GET /api/actuatorCommand` | every `Poll` seconds |
-| `POST /api/actuatorState` | on every state change, and at least once a minute as a heartbeat |
+| `POST /api/actuatorState` | mister: on every state change. Fan: every `Report` seconds, and straight away on a new command or the end of a run |
 
 Nothing here reads or writes a timestamp, so unlike the sensors this does not
 need `sensor-timesync.service` and a wrong clock cannot misfire the relay.
